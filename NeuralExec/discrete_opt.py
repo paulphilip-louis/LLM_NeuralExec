@@ -21,6 +21,8 @@ class WhiteBoxTokensOpt:
         self.llm = llm_obj.model
         self.tokenizer = llm_obj.tokenizer
         self.hparams = hparams
+
+        self.device = self.llm.device
         
         if self.llm:
             self.emb_matrix = self.llm.model.get_input_embeddings().weight    
@@ -62,27 +64,41 @@ class WhiteBoxTokensOpt:
             return self._make_model_input_single_prompt_multi_adv_tok(prompts, nes, with_target=with_target, keep_placeholder_tokens=keep_placeholder_tokens)
             
             
-        return self._make_model_input_multi_prompt_single_adv_tok([prompts], adv_tok=nes, with_target=with_target, keep_placeholder_tokens=keep_placeholder_tokens)
+        return self._make_model_input_multi_prompt_single_adv_tok([prompts], nes, with_target=with_target, keep_placeholder_tokens=keep_placeholder_tokens)
     
     
     def prepare_labels(self, labels, max_length):
-        labels_tok = self.tokenizer(labels, add_special_tokens=False, return_tensors="pt", max_length=max_length, padding='max_length').to(self.llm.device)
+        labels_tok = self.tokenizer(labels, add_special_tokens=False, return_tensors="pt", max_length=max_length, padding='max_length').to(self.device)
         # shift by 1 for autoregressive loss
         labels_tok.input_ids = torch.roll(labels_tok.input_ids, -1)
         labels_tok.attention_mask = torch.roll(labels_tok.attention_mask, -1)
         labels_tok.attention_mask[:,-1] = 0
         return labels_tok 
         
-    
+    def embed_tokens(self, prompts_tok):
+        return self.llm.model.embed_tokens(prompts_tok)
+
+    def get_logits(self, prompt, attention_mask):
+        input_type = prompt.dtype
+        if input_type == torch.int64:
+            # input tokens:
+            return self.llm(input_ids=prompt, attention_mask=attention_mask).logits
+        else:
+            # input embedded tokens:
+            return self.llm(inputs_embeds=prompt, attention_mask=attention_mask).logits
+        
     def get_gradient(self, ne, prompts):    
         # parse input
         prompts_tok, labels_tok, adv_mask = self.make_model_input(prompts, ne, keep_placeholder_tokens=True)
         batch_size = prompts_tok.input_ids.size(0)
 
-        prompt_emb = self.llm.model.embed_tokens(prompts_tok.input_ids)
+        prompt_emb = self.embed_tokens(prompts_tok.input_ids)
 
         # make onehot
-        adv_ohe = torch.nn.functional.one_hot(ne.tokens, self.emb_matrix.shape[0]).float().to(self.emb_matrix.dtype).to(self.emb_matrix.device)
+        adv_ohe = torch.nn.functional.one_hot(
+            ne.tokens,
+            self.emb_matrix.shape[0]
+        ).float().to(self.emb_matrix.dtype).to(self.emb_matrix.device)
         adv_ohe = adv_ohe.repeat((batch_size, 1, 1))
         adv_ohe.requires_grad_()
         # get embeddings adv_seg
@@ -92,7 +108,7 @@ class WhiteBoxTokensOpt:
         prompt_emb[adv_mask] = adv_emb.reshape((-1, adv_emb.size(-1)))
         ###################################################################################
         
-        logits = self.llm(inputs_embeds=prompt_emb, attention_mask=prompts_tok.attention_mask).logits
+        logits = self.get_logits(prompt_emb, prompts_tok.attention_mask)
         losses = self._compute_loss(logits, labels_tok)
         loss = losses.mean()
         loss.backward()
@@ -102,7 +118,6 @@ class WhiteBoxTokensOpt:
         grad = grad / grad.norm()
         
         return grad, loss, losses
-    
         
     
     def _make_model_input_multi_prompt_single_adv_tok(self, prompts, ne, keep_placeholder_tokens, with_target=True):
@@ -110,7 +125,7 @@ class WhiteBoxTokensOpt:
         # finalize prompts
         prompts_str = [prompt(self.llm_obj, ne, with_target=with_target, **self.prompt_kargs) for prompt in prompts]
 
-        prompts_tok = self.tokenizer(prompts_str, return_tensors="pt", padding=True, add_special_tokens=False).to(self.llm.device)
+        prompts_tok = self.tokenizer(prompts_str, return_tensors="pt", padding=True, add_special_tokens=False).to(self.device)
         # create map of adv tokens
         adv_mask = prompts_tok.input_ids == self.adv_token_id
         max_length = prompts_tok.input_ids.size(1) 
@@ -132,7 +147,7 @@ class WhiteBoxTokensOpt:
         # finalize prompts
         prompts_str = [prompt(self.llm_obj, ne, with_target=with_target, **self.prompt_kargs) for ne in nes]
 
-        prompts_tok = self.tokenizer(prompts_str, return_tensors="pt", padding=True, add_special_tokens=False).to(self.llm.device)
+        prompts_tok = self.tokenizer(prompts_str, return_tensors="pt", padding=True, add_special_tokens=False).to(self.device)
         # create map of adv tokens
         adv_mask = prompts_tok.input_ids == self.adv_token_id
         max_length = prompts_tok.input_ids.size(1) 
@@ -158,8 +173,6 @@ class WhiteBoxTokensOpt:
     def _compute_loss(self, logits, targets, weighted=True):
         # compute loss
         all_loss = self.loss_fun(torch.permute(logits, (0, 2, 1)), targets.input_ids)
-        ## mask only label loss
-        #label_loss = all_loss * targets.attention_mask
         
         if weighted:
             W = self.make_labels_weights(targets)
@@ -199,7 +212,7 @@ class WhiteBoxTokensOpt:
 
             new_control_toks = original_control_toks.scatter_(1, new_token_pos.unsqueeze(-1), new_token_val)
 
-        nes = [NeuralExec(ne.prefix.to(self.llm.device), ne.postfix.to(self.llm.device), ne.sep)]
+        nes = [NeuralExec(ne.prefix.to(self.device), ne.postfix.to(self.device), ne.sep)]
         nes += [NeuralExec(adv_tok[:ne.prefix_size], adv_tok[ne.prefix_size:], sep=ne.sep) for adv_tok in new_control_toks]
 
         return nes
@@ -210,7 +223,7 @@ class WhiteBoxTokensOpt:
         all_tokens = all_tokens[self.tokens_to_exclude_mask]
         idx = torch.multinomial(torch.ones(all_tokens.size(0)), num_samples=n, replacement=True)
 
-        tokens = all_tokens[idx].to(self.llm.device)
+        tokens = all_tokens[idx].to(self.device)
         return tokens
     
     
@@ -228,8 +241,8 @@ class WhiteBoxTokensOpt:
 
     def init_adv_seg_boot(self, prefix_str, postfix_str, sep):
         
-        prefix = self.tokenizer(prefix_str, return_tensors='pt', add_special_tokens=False).input_ids[0].to(self.llm.device)
-        postfix = self.tokenizer(postfix_str, return_tensors='pt', add_special_tokens=False).input_ids[0].to(self.llm.device)
+        prefix = self.tokenizer(prefix_str, return_tensors='pt', add_special_tokens=False).input_ids[0].to(self.device)
+        postfix = self.tokenizer(postfix_str, return_tensors='pt', add_special_tokens=False).input_ids[0].to(self.device)
         
         ne = NeuralExec(prefix, postfix, sep=sep)
         ne(self.tokenizer)
@@ -237,7 +250,6 @@ class WhiteBoxTokensOpt:
             
         return ne
 
-    @torch.no_grad()
     def _eval_loss(self, prompt, nes, weighted=True):
         batch_size = self.hparams['batch_size_eval']
         losses = []
@@ -249,8 +261,10 @@ class WhiteBoxTokensOpt:
             stop = batch_size * (i+1)
 
             prompts_tok, labels_tok, _ = self.make_model_input(prompt, nes=nes[start:stop])
-            logits = self.llm(**prompts_tok).logits
-            loss = self._compute_loss(logits, labels_tok, weighted=weighted)
+
+            with torch.no_grad():
+                logits = self.get_logits(prompts_tok.input_ids, prompts_tok.attention_mask)
+                loss = self._compute_loss(logits, labels_tok, weighted=weighted)
 
             loss = loss.detach().cpu().numpy()
             losses.append(loss)
@@ -263,7 +277,7 @@ class WhiteBoxTokensOpt:
     @torch.no_grad()
     def test_candidates(self, prompts, nes):
         
-        n = self.hparams['#prompts_to_sample_for_eval']
+        n = self.hparams.get('#prompts_to_sample_for_eval', -1)
         if n > 0:
             random.shuffle(prompts)
             prompts = prompts[:n]
@@ -349,18 +363,17 @@ class WhiteBoxTokensOpt:
         return good_nes 
     
     
-    def make_model_input_string(self, prompts, ne, with_target=True, device='cuda'):
+    def make_model_input_string(self, prompts, ne, with_target=True):
 
         # finalize prompts
         prompts_str = [prompt(self.llm_obj, ne, with_target=with_target, **self.prompt_kargs) for prompt in prompts]
 
-        prompts_tok = self.tokenizer(prompts_str, return_tensors="pt", padding=True, add_special_tokens=False).to(device)
+        prompts_tok = self.tokenizer(prompts_str, return_tensors="pt", padding=True, add_special_tokens=False).to(self.device)
         # create map of adv tokens
         adv_mask = prompts_tok.input_ids == self.adv_token_id
         max_length = prompts_tok.input_ids.size(1) 
 
         # replace adv tokens
-        print(prompts_tok.input_ids.device, adv_mask.device, ne.tokens.device)
         prompts_tok.input_ids[adv_mask] = ne.tokens.repeat((len(prompts), 1)).ravel()
 
         _prompts_str = self.tokenizer.batch_decode(prompts_tok.input_ids, skip_special_tokens=False)

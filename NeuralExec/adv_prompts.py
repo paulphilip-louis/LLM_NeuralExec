@@ -86,7 +86,7 @@ class SingleInputPrompt(AdvPrompt):
 
     
     def __call__(self, llm, ne, with_target=True, adv_pos=None, return_dict=False):
-                
+
         if self.adv_content is None:
             adv_content = self.make_adv_content(ne, llm.adv_placeholder_token)
         else:
@@ -108,7 +108,7 @@ class SingleInputPrompt(AdvPrompt):
             prompt = Prompt(task, self.system_prompt)(llm.tokenizer)
 
             if with_target:
-                prompt += ' '+self.target[llm.llm_name]
+                prompt += self.target[llm.llm_name]
 
         
         return prompt
@@ -148,7 +148,7 @@ class MultiInputPrompt(AdvPrompt):
         
         if vector_pos != 0:
             # if adv_chunk does not start with armed payload, add space 
-            adv_chunk = ' ' + adv_chunk
+            adv_chunk = adv_chunk
         
         return adv_chunk
     
@@ -190,7 +190,7 @@ class MultiInputPrompt(AdvPrompt):
             prompt = Prompt(task, self.system_prompt)(llm.tokenizer)
 
             if with_target:
-                prompt += ' '+self.target[llm.llm_name]
+                prompt += self.target[llm.llm_name]
 
 
         return prompt
@@ -259,7 +259,7 @@ class QAPrompt(MultiInputPrompt):
             prompt = Prompt(task, self.system_prompt)(llm.tokenizer)
 
             if with_target:
-                prompt += ' '+self.target[llm.llm_name]
+                prompt += self.target[llm.llm_name]
 
         
         return prompt
@@ -297,7 +297,7 @@ class CodePrompt(SingleInputPrompt):
             prompt = Prompt(task, self.system_prompt)(llm.tokenizer)
 
             if with_target:
-                prompt += ' '+self.target[llm.llm_name]
+                prompt += self.target[llm.llm_name]
 
         
         return prompt

@@ -67,7 +67,8 @@ def get_tokens_to_skip(
     tokens_to_skip_id = [vocab[k] for k in tokens_to_skip]
     
     # add special tokens
-    special_ids = llm.tokenizer(SPECIAL).input_ids + llm.tokenizer.all_special_ids
+    print("Broken in special_ids = llm.tokenizer(SPECIAL).input_ids #+ llm.tokenizer.all_special_id")
+    special_ids = llm.tokenizer(SPECIAL).input_ids #+ llm.tokenizer.all_special_ids
     tokens_to_skip_id += special_ids
     
     tokens_to_skip_id = list(set(tokens_to_skip_id))
