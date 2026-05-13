@@ -94,7 +94,12 @@ class Qwen(LLM):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.tokenizer.pad_token = self.tokenizer.eos_token
-        device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+        if torch.cuda.is_available():
+            device = torch.device("cuda")
+        elif torch.backends.mps.is_available():
+            device = torch.device("mps")
+        else:
+            device = torch.device("cpu")
         self.model = self.model.to(device)
         self.adv_placeholder_token = '<|object_ref_start|>'
         self.adv_token_id = 151646
@@ -106,7 +111,7 @@ _MODELS = {
     'meta-llama/Llama-2-7b-chat-hf' : (Llama, {'tokenizer_class':LlamaTokenizer, 'model_load_kargs':{'device_map':"auto", 'torch_dtype':torch.bfloat16}}),
     'meta-llama/Meta-Llama-3-8B-Instruct' : (Llama3, {'tokenizer_class':AutoTokenizer, 'model_load_kargs':{'device_map':"auto",}}),
     'microsoft/Phi-3-mini-128k-instruct' : (PHI, {'tokenizer_class':AutoTokenizer, 'model_load_kargs':{'device_map':"auto",}}),
-    'Qwen/Qwen2.5-1.5B-Instruct' : (Qwen, {'tokenizer_class':AutoTokenizer, 'model_load_kargs':{'device_map': 'mps', 'torch_dtype':torch.bfloat16}})
+    'Qwen/Qwen2.5-1.5B-Instruct' : (Qwen, {'tokenizer_class':AutoTokenizer, 'model_load_kargs':{'device_map': 'auto', 'torch_dtype':torch.bfloat16}})
 }
 
             
