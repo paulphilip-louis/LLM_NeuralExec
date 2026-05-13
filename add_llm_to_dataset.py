@@ -9,6 +9,8 @@ from NeuralExec.adv_prompts import Prompt
 from confs import hparams
 from confs.evaluation_setup import vhparams
 
+os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
+
 def get_instructions(dbs):
     insts = {}
     for db in dbs:
@@ -65,6 +67,7 @@ if __name__ == '__main__':
     
     # load llm
     llm = load_llm(args.llm_name)
+    
     
     # compute targets
     print("Computing targets...")
